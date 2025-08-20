@@ -1,23 +1,22 @@
 # -*- mode: python -*-
 import sys
 import os
+import glob
 from typing import TYPE_CHECKING
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs, copy_metadata
+from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
 
 if TYPE_CHECKING:
-    from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
+    pass
 
 
 PYPKG="electrum"
 MAIN_SCRIPT="run_electrum"
-PROJECT_ROOT = "F:/b1t-electrum-wallet"
-ICONS_FILE=f"{PROJECT_ROOT}/{PYPKG}/gui/icons/electrum.ico"
+PROJECT_ROOT = os.getcwd()
+ICONS_FILE=f"{PROJECT_ROOT}/{PYPKG}/gui/icons/b1t.ico"
 
-cmdline_name = os.environ.get("ELECTRUM_CMDLINE_NAME")
-if not cmdline_name:
-    raise Exception('no name')
-
+cmdline_name = "b1t-electrum"
 
 # see https://github.com/pyinstaller/pyinstaller/issues/2005
 hiddenimports = []
@@ -28,29 +27,65 @@ hiddenimports += collect_submodules(f"{PYPKG}.plugins")
 binaries = []
 # Workaround for "Retro Look":
 binaries += [b for b in collect_dynamic_libs('PyQt6') if 'qwindowsvista' in b[0]]
-# add libsecp256k1, libusb, etc:
-binaries += [(f"{PROJECT_ROOT}/{PYPKG}/*.dll", '.')]
+
+# Add libsecp256k1-0.dll from project root - embed into EXE
+if os.path.exists(f"{PROJECT_ROOT}/libsecp256k1-0.dll"):
+    binaries += [(f"{PROJECT_ROOT}/libsecp256k1-0.dll", '.')]
+
+# Try to find libsecp256k1 DLLs from site-packages and embed them
+try:
+    import site
+    for site_dir in site.getsitepackages():
+        # Check for electrum_ecc package DLLs
+        ecc_dir = os.path.join(site_dir, 'electrum_ecc')
+        if os.path.exists(ecc_dir):
+            for dll_file in glob.glob(os.path.join(ecc_dir, 'libsecp256k1-*.dll')):
+                binaries += [(dll_file, '.')]
+except Exception as e:
+    print(f"Warning: Could not find libsecp256k1 DLLs: {e}")
 
 
 datas = [
     (f"{PROJECT_ROOT}/{PYPKG}/*.json", PYPKG),
-    (f"{PROJECT_ROOT}/{PYPKG}/lnwire/*.csv", f"{PYPKG}/lnwire"),
-    (f"{PROJECT_ROOT}/{PYPKG}/wordlist/english.txt", f"{PYPKG}/wordlist"),
-    (f"{PROJECT_ROOT}/{PYPKG}/wordlist/slip39.txt", f"{PYPKG}/wordlist"),
     (f"{PROJECT_ROOT}/{PYPKG}/chains", f"{PYPKG}/chains"),
-    (f"{PROJECT_ROOT}/{PYPKG}/locale", f"{PYPKG}/locale"),
     (f"{PROJECT_ROOT}/{PYPKG}/plugins", f"{PYPKG}/plugins"),
     (f"{PROJECT_ROOT}/{PYPKG}/gui/icons", f"{PYPKG}/gui/icons"),
     (f"{PROJECT_ROOT}/{PYPKG}/gui/fonts", f"{PYPKG}/gui/fonts"),
 ]
-datas += collect_data_files(f"{PYPKG}.plugins")
-datas += collect_data_files('trezorlib')  # TODO is this needed? and same question for other hww libs
-datas += collect_data_files('safetlib')
-datas += collect_data_files('ckcc')
-datas += collect_data_files('bitbox02')
 
-# some deps rely on importlib metadata
-# datas += copy_metadata('slip10')  # from trezor->slip10 - commented out due to missing package
+# Add optional data files if they exist
+if glob.glob(f"{PROJECT_ROOT}/{PYPKG}/lnwire/*.csv"):
+    datas.append((f"{PROJECT_ROOT}/{PYPKG}/lnwire/*.csv", f"{PYPKG}/lnwire"))
+if os.path.exists(f"{PROJECT_ROOT}/{PYPKG}/wordlist/english.txt"):
+    datas.append((f"{PROJECT_ROOT}/{PYPKG}/wordlist/english.txt", f"{PYPKG}/wordlist"))
+if os.path.exists(f"{PROJECT_ROOT}/{PYPKG}/wordlist/slip39.txt"):
+    datas.append((f"{PROJECT_ROOT}/{PYPKG}/wordlist/slip39.txt", f"{PYPKG}/wordlist"))
+if os.path.exists(f"{PROJECT_ROOT}/{PYPKG}/locale"):
+    datas.append((f"{PROJECT_ROOT}/{PYPKG}/locale", f"{PYPKG}/locale"))
+datas += collect_data_files(f"{PYPKG}.plugins")
+# Hardware wallet data files - only add if packages are available
+try:
+    datas += collect_data_files('trezorlib')
+except:
+    pass
+try:
+    datas += collect_data_files('safetlib')
+except:
+    pass
+try:
+    datas += collect_data_files('ckcc')
+except:
+    pass
+try:
+    datas += collect_data_files('bitbox02')
+except:
+    pass
+
+# some deps rely on importlib metadata - only add if available
+try:
+    datas += copy_metadata('slip10')  # from trezor->slip10
+except:
+    pass
 
 # Exclude parts of Qt that we never use. Reduces binary size by tens of MBs. see #4815
 excludes = [
@@ -102,74 +137,50 @@ for d in a.datas:
         break
 
 
-# hotfix for #3171 (pre-Win10 binaries)
-a.binaries = [x for x in a.binaries if not x[1].lower().startswith(r'c:\windows')]
+# hotfix for #3171 (pre-Win10 binaries) - not needed on native Windows
+# a.binaries = [x for x in a.binaries if not x[1].lower().startswith(r'c:\windows')]
 
 pyz = PYZ(a.pure)
 
 
-#####
-# "standalone" exe with all dependencies packed into it
-
-exe_standalone = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    name=os.path.join("build", "pyi.win32", PYPKG, f"{cmdline_name}.exe"),
-    debug=False,
-    strip=None,
-    upx=False,
-    icon=ICONS_FILE,
-    console=False)
-    # console=True makes an annoying black box pop up, but it does make Electrum output command line commands, with this turned off no output will be given but commands can still be used
-
-exe_portable = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas + [('is_portable', 'README.md', 'DATA')],
-    name=os.path.join("build", "pyi.win32", PYPKG, f"{cmdline_name}-portable.exe"),
-    debug=False,
-    strip=None,
-    upx=False,
-    icon=ICONS_FILE,
-    console=False)
+# Standalone EXE-Dateien entfernt, da sie nicht korrekt funktionieren
+# Nur die EXE-Dateien mit separaten Abhängigkeiten werden erstellt
 
 #####
 # exe and separate files that NSIS uses to build installer "setup" exe
 
-exe_inside_setup_noconsole = EXE(
+# Standalone EXE with all dependencies included
+exe_standalone = EXE(
     pyz,
     a.scripts,
-    exclude_binaries=True,
-    name=os.path.join("build", "pyi.win32", PYPKG, f"{cmdline_name}.exe"),
-    debug=False,
-    strip=None,
-    upx=False,
-    icon=ICONS_FILE,
-    console=False)
-
-exe_inside_setup_console = EXE(
-    pyz,
-    a.scripts,
-    exclude_binaries=True,
-    name=os.path.join("build", "pyi.win32", PYPKG, f"{cmdline_name}-debug.exe"),
-    debug=False,
-    strip=None,
-    upx=False,
-    icon=ICONS_FILE,
-    console=True)
-
-coll = COLLECT(
-    exe_inside_setup_noconsole,
-    exe_inside_setup_console,
     a.binaries,
     a.zipfiles,
     a.datas,
+    [],
+    name=f"{cmdline_name}.exe",
+    debug=False,
+    bootloader_ignore_signals=False,
     strip=None,
     upx=True,
-    debug=False,
-    icon=ICONS_FILE,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False,
-    name=os.path.join('dist', PYPKG))
+    icon=ICONS_FILE)
+
+# Standalone Debug EXE with console
+exe_debug = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name=f"{cmdline_name}-debug.exe",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=None,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    icon=ICONS_FILE)

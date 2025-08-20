@@ -148,6 +148,8 @@ class BitcoinTestnet(AbstractNet):
     GENESIS = "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943"
     DEFAULT_PORTS = {'t': '51001', 's': '51002'}
 
+    CP_SPACING = 5000
+
     XPRV_HEADERS = {
         'standard':    0x04358394,  # tprv
         'p2wpkh-p2sh': 0x044a4e28,  # uprv
